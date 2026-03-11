@@ -1,0 +1,10 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+tree-sitter==0.20.1
+tree-sitter-languages==1.8.0
+sentence-transformers==2.2.2
+chromadb==0.4.18
+ollama==0.1.3  # Ollama Python客户端
+httpx==0.25.0
+python-multipart==0.0.6
+pydantic==2.4.2
