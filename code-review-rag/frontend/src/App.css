@@ -1,0 +1,118 @@
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: #1e1e1e;
+}
+
+/* 顶部栏 */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #20232a;
+  border-bottom: 1px solid #333;
+}
+
+.toolbar button {
+  background: #2d2f36;
+  border: none;
+  color: #ddd;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.toolbar button:hover {
+  background: #3c3f46;
+}
+
+.toolbar .primary {
+  background: #007acc;
+  color: white;
+}
+
+.toolbar .primary:hover {
+  background: #1890ff;
+}
+
+.filename {
+  margin-left: auto;
+  color: #aaa;
+}
+
+/* 主布局 */
+.main {
+  display: flex;
+  height: calc(100vh - 50px);
+}
+
+/* 左侧文件栏 */
+.sidebar {
+  width: 240px;
+  background: #252526;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.file-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #ccc;
+  transition: background 0.2s;
+}
+
+.file-item:hover {
+  background: #2f3136;
+}
+
+.file-item.active {
+  background: #094771;
+}
+
+/* 编辑器区域 */
+.editor-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 右侧结果 */
+.panel {
+  width: 320px;
+  background: #1e1e1e;
+  padding: 12px;
+  overflow-y: auto;
+  border-left: 1px solid #333;
+}
+
+.issue-card {
+  background: #2a2d34;
+  padding: 10px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.issue-high {
+  border-left: 4px solid #ff4d4f;
+}
+
+.issue-mid {
+  border-left: 4px solid #faad14;
+}
+
+.issue-low {
+  border-left: 4px solid #40a9ff;
+}
+
+.issue-title {
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.issue-suggestion {
+  font-size: 0.9em;
+  color: #aaa;
+}
