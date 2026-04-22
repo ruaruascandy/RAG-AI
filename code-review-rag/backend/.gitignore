@@ -1,0 +1,5 @@
+﻿.venv/
+.venv312/
+.hf_cache/
+__pycache__/
+.tmp/
