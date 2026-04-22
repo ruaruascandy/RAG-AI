@@ -1,10 +1,15 @@
-body {
+﻿body {
   margin: 0;
   font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
   background: #1e1e1e;
 }
 
-/* 顶部栏 */
+.app-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -37,18 +42,51 @@ body {
   background: #1890ff;
 }
 
+.toolbar .primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 .filename {
   margin-left: auto;
   color: #aaa;
 }
 
-/* 主布局 */
-.main {
-  display: flex;
-  height: calc(100vh - 50px);
+.progress-wrap {
+  background: #1b1d23;
+  border-bottom: 1px solid #2c2f37;
+  padding: 8px 16px 10px;
 }
 
-/* 左侧文件栏 */
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #b7c6dc;
+  margin-bottom: 6px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 8px;
+  background: #2b3038;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0e85ff 0%, #23d4a7 100%);
+  transition: width 0.5s ease;
+}
+
+.main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .sidebar {
   width: 240px;
   background: #252526;
@@ -72,14 +110,12 @@ body {
   background: #094771;
 }
 
-/* 编辑器区域 */
 .editor-container {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  min-width: 0;
 }
 
-/* 右侧结果 */
 .panel {
   width: 320px;
   background: #1e1e1e;
@@ -115,4 +151,16 @@ body {
 .issue-suggestion {
   font-size: 0.9em;
   color: #aaa;
+}
+
+.error-line {
+  background: rgba(255, 77, 79, 0.2);
+}
+
+.warning-line {
+  background: rgba(250, 173, 20, 0.2);
+}
+
+.info-line {
+  background: rgba(64, 169, 255, 0.2);
 }

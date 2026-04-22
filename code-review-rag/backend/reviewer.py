@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -11,15 +12,29 @@ from typing import Any, Dict, List
 import httpx
 
 
+logger = logging.getLogger("code_review_backend.reviewer")
+
+
 class Reviewer:
     def __init__(self, model: str | None = None):
-        self.model = model or os.getenv("REVIEWER_MODEL", "deepseek-coder:6.7b-instruct-q4_0")
+        primary_model = model or os.getenv("REVIEWER_MODEL", "qwen2.5-coder:3b")
+        fallback_models_raw = os.getenv(
+            "REVIEWER_FALLBACK_MODELS",
+            "deepseek-coder:6.7b-instruct-q4_0",
+        )
+        fallback_models = [m.strip() for m in fallback_models_raw.split(",") if m.strip()]
+        self.models = [primary_model, *fallback_models]
+        self.models = list(dict.fromkeys(self.models))
+        self.model = self.models[0]
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
-        self.num_ctx = int(os.getenv("REVIEWER_NUM_CTX", "2048"))
+        self.num_ctx = int(os.getenv("REVIEWER_NUM_CTX", "1024"))
         self.max_code_chars = int(os.getenv("REVIEWER_MAX_CODE_CHARS", "8000"))
         self.max_context_chars = int(os.getenv("REVIEWER_MAX_CONTEXT_CHARS", "12000"))
-        self.max_response_tokens = int(os.getenv("REVIEWER_MAX_TOKENS", "256"))
-        self.timeout_seconds = float(os.getenv("REVIEWER_TIMEOUT_SECONDS", "120"))
+        self.max_response_tokens = int(os.getenv("REVIEWER_MAX_TOKENS", "160"))
+        self.timeout_seconds = float(os.getenv("REVIEWER_TIMEOUT_SECONDS", "45"))
+        self.max_retries = int(os.getenv("REVIEWER_MAX_RETRIES", "2"))
+        self.retry_backoff_seconds = float(os.getenv("REVIEWER_RETRY_BACKOFF_SECONDS", "0.8"))
+        self.transport = os.getenv("REVIEWER_TRANSPORT", "auto").strip().lower()
         self._lock = Lock()
 
     def _trim_text(self, text: str, limit: int) -> str:
@@ -27,9 +42,13 @@ class Reviewer:
             return text
         return text[:limit] + "\n\n[内容过长，已截断]"
 
-    def _generate_once(self, prompt: str) -> str:
+    def _short_exc(self, exc: Exception, limit: int = 240) -> str:
+        text = f"{type(exc).__name__}: {exc}"
+        return text if len(text) <= limit else (text[:limit] + "...")
+
+    def _generate_once(self, model_name: str, prompt: str) -> str:
         payload = {
-            "model": self.model,
+            "model": model_name,
             "prompt": prompt,
             "stream": False,
             "keep_alive": "20m",
@@ -45,11 +64,11 @@ class Reviewer:
             data = response.json()
             return str(data.get("response", "")).strip()
 
-    def _generate_via_cli(self, prompt: str) -> str:
+    def _generate_via_cli(self, model_name: str, prompt: str) -> str:
         env = os.environ.copy()
         env["OLLAMA_HOST"] = "http://127.0.0.1:11434"
         result = subprocess.run(
-            ["ollama", "run", self.model],
+            ["ollama", "run", model_name],
             input=prompt.encode("utf-8"),
             capture_output=True,
             timeout=self.timeout_seconds + 30,
@@ -99,41 +118,99 @@ class Reviewer:
 }}
 """.strip()
 
-        last_error: Exception | None = None
+        start = time.perf_counter()
         output = ""
-        for _ in range(3):
-            try:
-                with self._lock:
-                    output = self._generate_once(prompt)
-                last_error = None
-                break
-            except Exception as exc:
-                last_error = exc
-                time.sleep(1.0)
+        used_transport = "none"
+        used_model = ""
+        errors: List[str] = []
 
-        if last_error is not None:
-            # API unstable on some Windows setups; fallback to CLI path.
-            try:
-                with self._lock:
-                    output = self._generate_via_cli(prompt)
-                last_error = None
-            except Exception as cli_exc:
-                return [
-                    {
-                        "line": 1,
-                        "severity": "高",
-                        "message": f"Ollama 调用失败(HTTP与CLI均失败): {last_error}; CLI: {cli_exc}",
-                        "suggestion": "请确认 Ollama 在运行，模型可用；必要时重启 Ollama 并降低并发请求。",
-                    }
-                ]
+        allow_http = self.transport in ("auto", "http")
+        allow_cli = self.transport in ("auto", "cli")
+        models_to_try = self.models
+
+        for model_name in models_to_try:
+            if allow_http:
+                for attempt in range(1, self.max_retries + 2):
+                    try:
+                        with self._lock:
+                            output = self._generate_once(model_name, prompt)
+                        used_transport = "http"
+                        used_model = model_name
+                        logger.info(
+                            "review_ok transport=%s model=%s attempt=%s duration_s=%.3f",
+                            used_transport,
+                            used_model,
+                            attempt,
+                            time.perf_counter() - start,
+                        )
+                        break
+                    except Exception as exc:
+                        short_exc = self._short_exc(exc)
+                        errors.append(f"http[{model_name}#{attempt}] {short_exc}")
+                        logger.warning(
+                            "review_attempt_failed transport=http model=%s attempt=%s error=%s",
+                            model_name,
+                            attempt,
+                            short_exc,
+                        )
+                        time.sleep(self.retry_backoff_seconds * attempt)
+
+            if output:
+                break
+
+            if allow_cli:
+                try:
+                    with self._lock:
+                        output = self._generate_via_cli(model_name, prompt)
+                    used_transport = "cli"
+                    used_model = model_name
+                    logger.info(
+                        "review_ok transport=%s model=%s duration_s=%.3f",
+                        used_transport,
+                        used_model,
+                        time.perf_counter() - start,
+                    )
+                    break
+                except Exception as exc:
+                    short_exc = self._short_exc(exc)
+                    errors.append(f"cli[{model_name}] {short_exc}")
+                    logger.warning(
+                        "review_attempt_failed transport=cli model=%s error=%s",
+                        model_name,
+                        short_exc,
+                    )
+
+        if not output:
+            msg = "; ".join(errors[:3]) if errors else "unknown error"
+            logger.error("review_failed duration_s=%.3f details=%s", time.perf_counter() - start, msg)
+            return [
+                {
+                    "line": 1,
+                    "severity": "高",
+                    "message": f"Ollama 调用失败(已重试): {msg}",
+                    "suggestion": "请确认 Ollama 在运行，模型可用；必要时切换小模型并降低并发请求。",
+                }
+            ]
 
         match = re.search(r"\{.*\}", output, re.DOTALL)
         if not match:
+            logger.warning(
+                "review_parse_empty transport=%s model=%s duration_s=%.3f",
+                used_transport,
+                used_model,
+                time.perf_counter() - start,
+            )
             return []
 
         try:
             data = json.loads(match.group())
         except json.JSONDecodeError:
+            logger.warning(
+                "review_parse_json_error transport=%s model=%s duration_s=%.3f",
+                used_transport,
+                used_model,
+                time.perf_counter() - start,
+            )
             return []
 
         raw_issues = data.get("issues", [])
@@ -171,4 +248,11 @@ class Reviewer:
                 }
             )
 
+        logger.info(
+            "review_done transport=%s model=%s issues=%s duration_s=%.3f",
+            used_transport,
+            used_model,
+            len(normalized),
+            time.perf_counter() - start,
+        )
         return normalized

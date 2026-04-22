@@ -11,6 +11,17 @@ $env:RAG_HF_HOME="D:\RAG-AI\hf_cache312"
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+## Reviewer P0 defaults (recommended)
+
+```powershell
+$env:REVIEWER_MODEL="qwen2.5-coder:3b"
+$env:REVIEWER_FALLBACK_MODELS="deepseek-coder:6.7b-instruct-q4_0"
+$env:REVIEWER_NUM_CTX="1024"
+$env:REVIEWER_MAX_TOKENS="160"
+$env:REVIEWER_TIMEOUT_SECONDS="45"
+$env:REVIEWER_MAX_RETRIES="2"
+```
+
 ## Quick health check
 
 ```powershell
