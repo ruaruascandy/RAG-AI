@@ -35,6 +35,7 @@ class Reviewer:
         self.max_retries = int(os.getenv("REVIEWER_MAX_RETRIES", "2"))
         self.retry_backoff_seconds = float(os.getenv("REVIEWER_RETRY_BACKOFF_SECONDS", "0.8"))
         self.transport = os.getenv("REVIEWER_TRANSPORT", "auto").strip().lower()
+        self.response_format = os.getenv("REVIEWER_RESPONSE_FORMAT", "json").strip().lower()
         self._lock = Lock()
 
     def _trim_text(self, text: str, limit: int) -> str:
@@ -58,6 +59,8 @@ class Reviewer:
                 "num_predict": self.max_response_tokens,
             },
         }
+        if self.response_format == "json":
+            payload["format"] = "json"
         with httpx.Client(timeout=self.timeout_seconds) as client:
             response = client.post(f"{self.ollama_host}/api/generate", json=payload)
             response.raise_for_status()
@@ -81,6 +84,51 @@ class Reviewer:
                 stderr = stderr[:300] + "..."
             raise RuntimeError(stderr or f"ollama run exited with code {result.returncode}")
         return (result.stdout or b"").decode("utf-8", errors="ignore").strip()
+
+    def _extract_json_candidates(self, text: str) -> List[str]:
+        candidates: List[str] = []
+        stack = 0
+        start = -1
+        for idx, ch in enumerate(text):
+            if ch == "{":
+                if stack == 0:
+                    start = idx
+                stack += 1
+            elif ch == "}":
+                if stack > 0:
+                    stack -= 1
+                    if stack == 0 and start >= 0:
+                        candidates.append(text[start : idx + 1])
+                        start = -1
+        return candidates
+
+    def _parse_json_payload(self, output: str) -> Dict[str, Any] | None:
+        text = output.strip()
+        if not text:
+            return None
+
+        # Some models wrap JSON inside markdown fences.
+        fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+        candidates: List[str] = [text]
+        if fence_match:
+            candidates.insert(0, fence_match.group(1).strip())
+
+        candidates.extend(self._extract_json_candidates(text))
+        seen = set()
+        deduped_candidates = []
+        for candidate in candidates:
+            if candidate and candidate not in seen:
+                deduped_candidates.append(candidate)
+                seen.add(candidate)
+
+        for candidate in deduped_candidates:
+            try:
+                data = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                return data
+        return None
 
     def review(
         self,
@@ -192,25 +240,16 @@ class Reviewer:
                 }
             ]
 
-        match = re.search(r"\{.*\}", output, re.DOTALL)
-        if not match:
-            logger.warning(
-                "review_parse_empty transport=%s model=%s duration_s=%.3f",
-                used_transport,
-                used_model,
-                time.perf_counter() - start,
-            )
-            return []
-
-        try:
-            data = json.loads(match.group())
-        except json.JSONDecodeError:
+        data = self._parse_json_payload(output)
+        if data is None:
+            output_preview = output[:180].replace("\n", "\\n")
             logger.warning(
                 "review_parse_json_error transport=%s model=%s duration_s=%.3f",
                 used_transport,
                 used_model,
                 time.perf_counter() - start,
             )
+            logger.warning("review_parse_output_preview=%s", output_preview)
             return []
 
         raw_issues = data.get("issues", [])

@@ -122,6 +122,7 @@
   padding: 12px;
   overflow-y: auto;
   border-left: 1px solid #333;
+  color: #fff;
 }
 
 .issue-card {
@@ -150,7 +151,7 @@
 
 .issue-suggestion {
   font-size: 0.9em;
-  color: #aaa;
+  color: #fff;
 }
 
 .error-line {
