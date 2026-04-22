@@ -12,10 +12,18 @@ declare global {
 }
 
 interface Issue {
+  file?: string;
   line: number;
   severity: string;
   message: string;
   suggestion: string;
+}
+
+interface ProjectReviewStats {
+  reviewed_files: number;
+  total_files: number;
+  skipped_files: number;
+  duration_seconds: number;
 }
 
 function App() {
@@ -24,6 +32,7 @@ function App() {
   const [projectPath, setProjectPath] = useState<string>('');
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
+  const [projectStats, setProjectStats] = useState<ProjectReviewStats | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [reviewProgress, setReviewProgress] = useState<number>(0);
   const [reviewStage, setReviewStage] = useState<string>('');
@@ -89,7 +98,7 @@ function App() {
   const handleFileOpen = async () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.py';
+    input.accept = '.py,.js,.jsx,.ts,.tsx,.java,.go,.rs,.cpp,.c,.h,.hpp,.cs,.php,.rb,.kt,.swift';
     input.onchange = async (e: any) => {
       const file = e.target.files[0];
       if (file) {
@@ -107,6 +116,7 @@ function App() {
     setCode('');
     setFilename('untitled.py');
     setIssues([]);
+    setProjectStats(null);
   };
 
   const handleReview = async () => {
@@ -116,6 +126,7 @@ function App() {
     }
     setLoading(true);
     startProgress();
+    setProjectStats(null);
     try {
       setReviewStage('检索上下文...');
       const response = await axios.post('http://localhost:8000/review_with_context', {
@@ -129,6 +140,42 @@ function App() {
       console.error(error);
       finishProgress(100, '审查失败');
       alert('审查失败，请确保后端服务已启动。');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => {
+        setReviewProgress(0);
+        setReviewStage('');
+      }, 1000);
+    }
+  };
+
+  const handleProjectReview = async () => {
+    if (!projectPath) {
+      alert('请先打开项目目录');
+      return;
+    }
+
+    setLoading(true);
+    startProgress();
+    setReviewStage('扫描项目文件...');
+    try {
+      const response = await axios.post('http://localhost:8000/review_project', {
+        folder_path: projectPath,
+        max_files: 25,
+        max_file_chars: 4500,
+      });
+      setIssues(response.data.issues || []);
+      setProjectStats({
+        reviewed_files: response.data.reviewed_files || 0,
+        total_files: response.data.total_files || 0,
+        skipped_files: response.data.skipped_files || 0,
+        duration_seconds: response.data.duration_seconds || 0,
+      });
+      finishProgress(100, '全项目审查完成');
+    } catch (error) {
+      console.error(error);
+      finishProgress(100, '全项目审查失败');
+      alert('全项目审查失败，请确保后端服务已启动。');
     } finally {
       setLoading(false);
       window.setTimeout(() => {
@@ -201,6 +248,9 @@ function App() {
         <button className="primary" onClick={handleReview} disabled={loading}>
           {loading ? '审查中...' : '开始审查'}
         </button>
+        <button onClick={handleProjectReview} disabled={loading || !projectPath}>
+          全项目审查
+        </button>
 
         <span className="filename">{filename}</span>
       </div>
@@ -251,6 +301,14 @@ function App() {
 
         <div className="panel">
           <h3>审查结果</h3>
+          {projectStats && (
+            <div className="review-summary">
+              <div>已审查文件: {projectStats.reviewed_files}</div>
+              <div>项目文件总数: {projectStats.total_files}</div>
+              <div>跳过文件: {projectStats.skipped_files}</div>
+              <div>耗时: {projectStats.duration_seconds}s</div>
+            </div>
+          )}
           {issues.length === 0 ? (
             <p>暂无问题</p>
           ) : (
@@ -266,7 +324,7 @@ function App() {
                 }`}
               >
                 <div className="issue-title">
-                  行 {issue.line} [{issue.severity}]
+                  {issue.file ? `${issue.file} · ` : ''}行 {issue.line} [{issue.severity}]
                 </div>
                 <div>{issue.message}</div>
                 <div className="issue-suggestion">建议: {issue.suggestion}</div>

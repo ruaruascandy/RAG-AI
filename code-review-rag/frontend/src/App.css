@@ -33,6 +33,11 @@
   background: #3c3f46;
 }
 
+.toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .toolbar .primary {
   background: #007acc;
   color: white;
@@ -152,6 +157,16 @@
 .issue-suggestion {
   font-size: 0.9em;
   color: #fff;
+}
+
+.review-summary {
+  background: #252a33;
+  border: 1px solid #3a4150;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  line-height: 1.5;
+  font-size: 13px;
 }
 
 .error-line {
