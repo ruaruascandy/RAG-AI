@@ -262,6 +262,7 @@ body {
   padding: 9px;
   margin-bottom: 9px;
   background: #1b1d22;
+  cursor: pointer;
 }
 
 .issue-high {
@@ -312,15 +313,30 @@ body {
 }
 
 .error-line {
-  background: rgba(255, 77, 79, 0.2);
+  background: rgba(255, 77, 79, 0.22) !important;
 }
 
 .warning-line {
-  background: rgba(250, 173, 20, 0.2);
+  background: rgba(250, 173, 20, 0.22) !important;
 }
 
 .info-line {
-  background: rgba(64, 169, 255, 0.2);
+  background: rgba(64, 169, 255, 0.22) !important;
+}
+
+.error-line-margin {
+  background: #ff4d4f;
+  width: 6px !important;
+}
+
+.warning-line-margin {
+  background: #faad14;
+  width: 6px !important;
+}
+
+.info-line-margin {
+  background: #40a9ff;
+  width: 6px !important;
 }
 
 @media (max-width: 1060px) {

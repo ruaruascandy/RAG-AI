@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const fs = require('fs');
 const path = require('path');
 
 function createWindow() {
@@ -20,9 +21,26 @@ function createWindow() {
   }
 }
 
-ipcMain.handle('open-folder-dialog', async () => {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
-  return result;
+ipcMain.handle('open-path-dialog', async (_event, options = {}) => {
+  const { extensions = [] } = options;
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile', 'openDirectory'],
+    filters: extensions.length > 0 ? [{ name: 'Code Files', extensions }] : undefined,
+  });
+
+  if (result.canceled || !result.filePaths?.length) {
+    return { canceled: true, filePaths: [], kind: null };
+  }
+
+  const selected = result.filePaths[0];
+  let kind = null;
+  try {
+    const stat = fs.statSync(selected);
+    kind = stat.isDirectory() ? 'directory' : 'file';
+  } catch (_err) {
+    kind = null;
+  }
+  return { canceled: false, filePaths: [selected], kind };
 });
 
 app.whenReady().then(() => {
