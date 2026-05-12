@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import axios from 'axios';
 import './App.css';
@@ -26,11 +26,102 @@ interface ProjectReviewStats {
   duration_seconds: number;
 }
 
+interface TreeNode {
+  name: string;
+  path: string;
+  type: 'folder' | 'file';
+  children?: TreeNode[];
+}
+
+interface MutableTreeNode {
+  name: string;
+  path: string;
+  type: 'folder' | 'file';
+  children: MutableTreeNode[];
+}
+
+const normalizeRelPath = (value: string) => value.replace(/\\/g, '/');
+
+const buildFileTree = (files: string[]): TreeNode[] => {
+  const root: MutableTreeNode = { name: '', path: '', type: 'folder', children: [] };
+
+  const ensureFolder = (parent: MutableTreeNode, name: string, path: string): MutableTreeNode => {
+    const exists = parent.children.find((item) => item.type === 'folder' && item.name === name);
+    if (exists) {
+      return exists;
+    }
+    const created: MutableTreeNode = { name, path, type: 'folder', children: [] };
+    parent.children.push(created);
+    return created;
+  };
+
+  for (const rawPath of files) {
+    const path = normalizeRelPath(rawPath);
+    const parts = path.split('/').filter(Boolean);
+    if (!parts.length) {
+      continue;
+    }
+
+    let cursor = root;
+    for (let idx = 0; idx < parts.length; idx += 1) {
+      const part = parts[idx];
+      const currentPath = parts.slice(0, idx + 1).join('/');
+      const isFile = idx === parts.length - 1;
+
+      if (isFile) {
+        const fileExists = cursor.children.find((item) => item.type === 'file' && item.path === currentPath);
+        if (!fileExists) {
+          cursor.children.push({
+            name: part,
+            path: currentPath,
+            type: 'file',
+            children: [],
+          });
+        }
+      } else {
+        cursor = ensureFolder(cursor, part, currentPath);
+      }
+    }
+  }
+
+  const sortNodes = (nodes: MutableTreeNode[]): TreeNode[] => {
+    const sorted = [...nodes].sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === 'folder' ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name, 'zh-Hans-CN');
+    });
+
+    return sorted.map((node) => ({
+      name: node.name,
+      path: node.path,
+      type: node.type,
+      children: node.type === 'folder' ? sortNodes(node.children) : undefined,
+    }));
+  };
+
+  return sortNodes(root.children);
+};
+
+const buildDefaultExpandedFolders = (files: string[]) => {
+  const expanded = new Set<string>();
+  for (const file of files) {
+    const parts = normalizeRelPath(file).split('/').filter(Boolean);
+    if (parts.length > 1) {
+      expanded.add(parts[0]);
+    }
+  }
+  return expanded;
+};
+
 function App() {
-  const [code, setCode] = useState<string>('# 在此输入你的 Python 代码\n\ndef hello():\n    print("Hello, World!")\n');
+  const [code, setCode] = useState<string>('# 在此输入你的代码\n\ndef hello():\n    print("Hello, World!")\n');
   const [filename, setFilename] = useState<string>('untitled.py');
+  const [singleFileLabel, setSingleFileLabel] = useState<string>('');
   const [projectPath, setProjectPath] = useState<string>('');
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [rootExpanded, setRootExpanded] = useState<boolean>(true);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [projectStats, setProjectStats] = useState<ProjectReviewStats | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -40,6 +131,16 @@ function App() {
   const editorRef = useRef<any>(null);
   const decorationIdsRef = useRef<string[]>([]);
   const progressTimerRef = useRef<number | null>(null);
+
+  const tree = useMemo(() => buildFileTree(projectFiles), [projectFiles]);
+
+  const projectName = useMemo(() => {
+    if (!projectPath) {
+      return '';
+    }
+    const parts = normalizeRelPath(projectPath).split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : projectPath;
+  }, [projectPath]);
 
   const clearProgressTimer = () => {
     if (progressTimerRef.current) {
@@ -74,20 +175,38 @@ function App() {
     setReviewStage(stage);
   };
 
+  const toggleFolder = (folderPath: string) => {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
+      } else {
+        next.add(folderPath);
+      }
+      return next;
+    });
+  };
+
   const handleOpenFolder = async () => {
     if (!window.electronAPI) {
       alert('当前不在 Electron 环境中，请使用 Electron 启动应用。');
       return;
     }
+
     const result = await window.electronAPI.openFolderDialog();
     if (!result.canceled && result.filePaths.length > 0) {
       const folder = result.filePaths[0];
       setProjectPath(folder);
+      setSingleFileLabel('');
+
       try {
         await axios.post('http://localhost:8000/index_project', { folder_path: folder });
         const filesRes = await axios.post('http://localhost:8000/get_project_files', { folder_path: folder });
-        setProjectFiles(filesRes.data.files);
-        alert(`项目索引完成，共 ${filesRes.data.files.length} 个文件`);
+        const normalizedFiles: string[] = (filesRes.data.files || []).map((item: string) => normalizeRelPath(item));
+        setProjectFiles(normalizedFiles);
+        setExpandedFolders(buildDefaultExpandedFolders(normalizedFiles));
+        setRootExpanded(true);
+        alert(`项目索引完成，共 ${normalizedFiles.length} 个文件`);
       } catch (err) {
         console.error(err);
         alert('索引项目失败，请确保后端服务已启动。');
@@ -103,10 +222,13 @@ function App() {
       const file = e.target.files[0];
       if (file) {
         setFilename(file.name);
+        setSingleFileLabel(file.name);
         const text = await file.text();
         setCode(text);
         setProjectPath('');
         setProjectFiles([]);
+        setExpandedFolders(new Set());
+        setProjectStats(null);
       }
     };
     input.click();
@@ -115,6 +237,10 @@ function App() {
   const handleClear = () => {
     setCode('');
     setFilename('untitled.py');
+    setSingleFileLabel('');
+    setProjectPath('');
+    setProjectFiles([]);
+    setExpandedFolders(new Set());
     setIssues([]);
     setProjectStats(null);
   };
@@ -124,6 +250,7 @@ function App() {
       alert('请先输入或打开代码');
       return;
     }
+
     setLoading(true);
     startProgress();
     setProjectStats(null);
@@ -158,6 +285,7 @@ function App() {
     setLoading(true);
     startProgress();
     setReviewStage('扫描项目文件...');
+
     try {
       const response = await axios.post('http://localhost:8000/review_project', {
         folder_path: projectPath,
@@ -187,7 +315,7 @@ function App() {
 
   const handleFileClick = async (fileRelPath: string) => {
     if (!projectPath) return;
-    const fullPath = `${projectPath}/${fileRelPath}`;
+    const fullPath = `${projectPath}\\${fileRelPath.replace(/\//g, '\\')}`;
     try {
       const res = await axios.get(`http://localhost:8000/read_file?path=${encodeURIComponent(fullPath)}`);
       setCode(res.data.content);
@@ -223,10 +351,7 @@ function App() {
               : 'info-line',
       },
     }));
-    decorationIdsRef.current = editorRef.current.deltaDecorations(
-      decorationIdsRef.current,
-      decorations,
-    );
+    decorationIdsRef.current = editorRef.current.deltaDecorations(decorationIdsRef.current, decorations);
   }, [issues]);
 
   useEffect(() => {
@@ -238,21 +363,65 @@ function App() {
 
   useEffect(() => () => clearProgressTimer(), []);
 
+  const getSeverityClass = (severity: string) => {
+    if (severity === '高') return 'severity-high';
+    if (severity === '中') return 'severity-mid';
+    return 'severity-low';
+  };
+
+  const renderTree = (nodes: TreeNode[], depth = 0): React.ReactNode[] => {
+    return nodes.map((node) => {
+      if (node.type === 'folder') {
+        const expanded = expandedFolders.has(node.path);
+        return (
+          <div key={node.path}>
+            <div
+              className="tree-row folder-row"
+              style={{ paddingLeft: `${10 + depth * 14}px` }}
+              onClick={() => toggleFolder(node.path)}
+            >
+              <span className="tree-arrow">{expanded ? 'v' : '>'}</span>
+              <span className="tree-folder-mark" />
+              <span className="tree-label">{node.name}</span>
+            </div>
+            {expanded && node.children && renderTree(node.children, depth + 1)}
+          </div>
+        );
+      }
+
+      return (
+        <div
+          key={node.path}
+          className={`tree-row file-row ${filename === node.path ? 'active' : ''}`}
+          style={{ paddingLeft: `${26 + depth * 14}px` }}
+          onClick={() => handleFileClick(node.path)}
+        >
+          <span className="tree-file-mark" />
+          <span className="tree-label">{node.name}</span>
+        </div>
+      );
+    });
+  };
+
   return (
     <div className="app-shell">
       <div className="toolbar">
-        <button onClick={handleFileOpen}>打开文件</button>
-        <button onClick={handleOpenFolder}>打开项目</button>
-        <button onClick={handleClear}>清空</button>
-
-        <button className="primary" onClick={handleReview} disabled={loading}>
-          {loading ? '审查中...' : '开始审查'}
-        </button>
-        <button onClick={handleProjectReview} disabled={loading || !projectPath}>
-          全项目审查
-        </button>
-
-        <span className="filename">{filename}</span>
+        <div className="toolbar-title">Code Review</div>
+        <div className="toolbar-actions">
+          <button onClick={handleFileOpen}>打开文件</button>
+          <button onClick={handleOpenFolder}>打开项目</button>
+          <button onClick={handleClear}>清空</button>
+          <button className="primary" onClick={handleReview} disabled={loading}>
+            {loading ? '审查中...' : '审查当前文件'}
+          </button>
+          <button onClick={handleProjectReview} disabled={loading || !projectPath}>
+            全项目审查
+          </button>
+        </div>
+        <div className="toolbar-meta">
+          <span>{projectName || (singleFileLabel ? `单文件: ${singleFileLabel}` : '未打开项目')}</span>
+          <span>问题: {issues.length}</span>
+        </div>
       </div>
 
       {(loading || reviewProgress > 0) && (
@@ -269,18 +438,17 @@ function App() {
 
       <div className="main">
         {projectPath && (
-          <div className="sidebar">
-            <h4>项目文件</h4>
-            {projectFiles.map((file) => (
-              <div
-                key={file}
-                className={`file-item ${filename === file ? 'active' : ''}`}
-                onClick={() => handleFileClick(file)}
-              >
-                {file}
-              </div>
-            ))}
-          </div>
+          <aside className="sidebar">
+            <div className="sidebar-head">
+              <div className="sidebar-title">EXPLORER</div>
+            </div>
+            <div className="tree-root" onClick={() => setRootExpanded((prev) => !prev)}>
+              <span className="tree-arrow">{rootExpanded ? 'v' : '>'}</span>
+              <span className="tree-folder-mark" />
+              <span className="tree-label">{projectName}</span>
+            </div>
+            <div className="tree-wrap">{rootExpanded ? renderTree(tree, 1) : null}</div>
+          </aside>
         )}
 
         <div className="editor-container">
@@ -299,8 +467,8 @@ function App() {
           />
         </div>
 
-        <div className="panel">
-          <h3>审查结果</h3>
+        <aside className="panel">
+          <div className="panel-title">审查结果</div>
           {projectStats && (
             <div className="review-summary">
               <div>已审查文件: {projectStats.reviewed_files}</div>
@@ -309,29 +477,27 @@ function App() {
               <div>耗时: {projectStats.duration_seconds}s</div>
             </div>
           )}
+
           {issues.length === 0 ? (
-            <p>暂无问题</p>
+            <div className="empty-text">暂无问题</div>
           ) : (
             issues.map((issue, idx) => (
               <div
                 key={idx}
                 className={`issue-card ${
-                  issue.severity === '高'
-                    ? 'issue-high'
-                    : issue.severity === '中'
-                      ? 'issue-mid'
-                      : 'issue-low'
+                  issue.severity === '高' ? 'issue-high' : issue.severity === '中' ? 'issue-mid' : 'issue-low'
                 }`}
               >
                 <div className="issue-title">
-                  {issue.file ? `${issue.file} · ` : ''}行 {issue.line} [{issue.severity}]
+                  {issue.file ? `${issue.file} · ` : ''}行 {issue.line}
                 </div>
+                <div className={`severity-tag ${getSeverityClass(issue.severity)}`}>{issue.severity}</div>
                 <div>{issue.message}</div>
                 <div className="issue-suggestion">建议: {issue.suggestion}</div>
               </div>
             ))
           )}
-        </div>
+        </aside>
       </div>
     </div>
   );
